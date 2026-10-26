@@ -1,6 +1,7 @@
 # Render Blueprint — deploy via: Dashboard → New → Blueprint → select this repo.
-# Same Dockerfile and start.sh as the Fly.io deployment; Render injects its own
-# PORT, which Open WebUI honours (do NOT set PORT here).
+# Same Dockerfile and start.sh as the Fly.io deployment. Render routes traffic
+# to $PORT (default 10000) and Open WebUI's start.sh honours PORT and binds
+# 0.0.0.0 — pinned below so Render's port scan finds it deterministically.
 #
 # Persistence model: no disk (free tier compatible). Chat history, users and
 # settings live in PostgreSQL via DATABASE_URL. Uploads, the RAG vector store
@@ -19,6 +20,9 @@ services:
     region: singapore      # closest Render region to Australia
     healthCheckPath: /health
     envVars:
+      # Render's port scan expects an HTTP listener on 0.0.0.0:$PORT (10000).
+      - key: PORT
+        value: "10000"
       - key: DATABASE_URL
         sync: false        # postgresql://user:pass@host:5432/dbname
                            # (Render managed PG, Neon, Supabase, ...)

@@ -97,8 +97,10 @@ Render vs Fly.io notes:
   instead. Free services sleep after ~15 min idle and the tailnet node drops
   offline until the next public request; switch `plan: free` to `plan: starter`
   in `render.yaml` if you need 24/7 tailnet reachability.
-- Render injects its own `PORT`, which Open WebUI honours — `PORT` is deliberately
-  not set in `render.yaml`.
+- Listen port is pinned to `10000` in `render.yaml` (Render's default): Render's
+  port scan fails the deploy with "No open HTTP ports detected" if nothing binds
+  `0.0.0.0:$PORT` in time — upstream `backend/start.sh` honours `PORT`, so no
+  wrapper changes are needed.
 - Render exposes service env vars to the Docker **build**, so `HTTP(S)_PROXY` is
   exported by `start.sh` at container start instead — a localhost proxy visible
   at build time breaks `apt`/`curl` install steps (observed as failed builds).
