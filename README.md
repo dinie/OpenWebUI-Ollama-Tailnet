@@ -110,19 +110,26 @@ Render vs Fly.io notes:
 ### Memory footprint (Render 512MB cap)
 
 Render's free **and** Starter plans both cap instances at 512MB — upgrading to
-Starter would NOT help. The stock Open WebUI config loads
-sentence-transformers + PyTorch for local RAG embeddings, which (with Python and
-tailscaled) OOMs the instance at boot. `render.yaml` therefore offloads
-embeddings to the tailnet Ollama (`RAG_EMBEDDING_ENGINE=ollama`):
+Starter would NOT help. Open WebUI has two built-in local-ML features that each
+pull in large model runtimes and OOM a 512MB instance at boot
+([official guide](https://docs.openwebui.com/tutorials/tips/reduce-ram-usage/)):
 
-```bash
-docker compose exec ollama ollama pull nomic-embed-text   # needed once, locally
-```
+1. **RAG embeddings** — sentence-transformers + PyTorch. Offloaded to the
+   tailnet Ollama (`RAG_EMBEDDING_ENGINE=ollama`):
 
-This keeps the Render instance in the ~350–450MB range. Note the trade-off:
-RAG ingestion/retrieval on Render now round-trips to your Mac, and won't work
-while it's offline. The Fly deployment is untouched — its 2GB VM runs the
-default local embeddings fine.
+   ```bash
+   docker compose exec ollama ollama pull nomic-embed-text   # needed once, locally
+   ```
+
+2. **Speech-to-text** — the default `AUDIO_STT_ENGINE` loads a local
+   faster-whisper model. `render.yaml` sets `AUDIO_STT_ENGINE=openai`, which
+   routes STT calls to OpenAI instead (only exercised if a user dictates speech;
+   then `OPENAI_API_KEY` must be set).
+
+With both offloaded, the instance idles around ~200–400MB. Trade-offs: RAG and
+dictation on Render depend on external services (your Mac / OpenAI) and fail
+while they're unreachable. The Fly deployment is untouched — its 2GB VM runs
+the defaults fine.
 
 If memory still spikes (many concurrent users), the options are Render Standard
 (2GB, paid) or just using the Fly deployment.

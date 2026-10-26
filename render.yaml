@@ -43,6 +43,11 @@ services:
         value: ollama
       - key: RAG_EMBEDDING_MODEL
         value: nomic-embed-text
+      # Same story for speech-to-text: the default engine loads faster-whisper
+      # locally (~200MB+ RSS). Route STT to OpenAI instead — only exercised when
+      # a user dictates speech, and then OPENAI_API_KEY is required.
+      - key: AUDIO_STT_ENGINE
+        value: openai
       - key: OPENAI_API_KEY
         sync: false
 
