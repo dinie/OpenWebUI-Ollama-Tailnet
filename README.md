@@ -25,7 +25,9 @@ container so the instance is also reachable directly on your tailnet.
 | `Dockerfile` | Open WebUI base image + Tailscale client + entrypoint wiring   |
 | `start.sh`   | Starts `tailscaled`, runs `tailscale up`, then starts Open WebUI |
 | `fly.toml`   | Fly app config: region, volume mount, health check, VM size    |
-| `deploy.sh`  | Idempotent deploy: creates app/volume/secrets, then deploys    |
+| `deploy.sh`  | Idempotent deploy to Fly.io: creates app/volume/secrets, then deploys |
+| `render.yaml` | Render Blueprint: free-plan web service + env vars (Render's `fly.toml`) |
+| `deploy-render.sh` | Triggers a Render deploy via the Render API           |
 | `docker-compose.yml` | Local Ollama + Tailscale sidecar published on the tailnet |
 | `tailscale/serve.json` | `tailscale serve` config: tailnet HTTPS :443 → `ollama:11434` |
 | `.env`       | (gitignored) Local secrets, sourced by `deploy.sh` / compose   |
@@ -44,6 +46,12 @@ container so the instance is also reachable directly on your tailnet.
 
 ## Deploy
 
+The same container image (`Dockerfile` + `start.sh`) runs on both platforms — you
+can deploy to either or both; they'll be two distinct tailnet nodes
+(`openwebui` and `openwebui-render`).
+
+### Fly.io
+
 ```bash
 # 1. Configure
 cp .env.example .env   # or just export the variable
@@ -60,11 +68,73 @@ cp .env.example .env   # or just export the variable
 App name and region come from `fly.toml`; override with `FLY_APP` / `FLY_REGION`
 environment variables. The app name must be globally unique on Fly.io.
 
+### Render
+
+Render deploys from a Git repo, so push this directory to GitHub/GitLab first, then:
+
+1. In the [Render dashboard](https://dashboard.render.com): **New → Blueprint**,
+   select the repo. Render reads `render.yaml` and creates the free-plan web
+   service, health check, and environment variables (no disk — persistence comes
+   from PostgreSQL, see below).
+2. When prompted, set `TAILSCALE_AUTHKEY`, `DATABASE_URL`, and (once local Ollama
+   is running) `OLLAMA_BASE_URL=https://ollama.<tailnet>.ts.net`.
+3. Render builds `Dockerfile` and starts it. The app is live at
+   `https://<service-name>.onrender.com` and joins the tailnet as
+   `openwebui-render`.
+
+Subsequent updates deploy automatically when you push to the repo. To trigger a
+redeploy manually:
+
+```bash
+export RENDER_API_KEY=rnd_XXXX     # dashboard.render.com/u/settings#api-keys
+export RENDER_SERVICE_ID=srv-XXXX  # from the service URL in the dashboard
+./deploy-render.sh
+```
+
+Render vs Fly.io notes:
+
+- Runs on the **free plan** (no disk) — persistence comes from PostgreSQL
+  instead. Free services sleep after ~15 min idle and the tailnet node drops
+  offline until the next public request; switch `plan: free` to `plan: starter`
+  in `render.yaml` if you need 24/7 tailnet reachability.
+- Render injects its own `PORT`, which Open WebUI honours — `PORT` is deliberately
+  not set in `render.yaml`.
+- `region: singapore` is the closest Render region to Australia.
+
+### PostgreSQL persistence (Render)
+
+Open WebUI reads `DATABASE_URL` natively (SQLAlchemy/Peewee) and runs its
+migrations at boot, so no code changes are needed — persistence replaces the disk:
+
+```text
+postgresql://<user>:<password>@<host>:5432/<database>
+```
+
+**Survives restarts/redeploys:** chat history, users, settings, model configs.
+
+**Ephemeral without a disk** (reset on every restart): uploaded files, the RAG
+vector store (re-upload knowledge-base docs), and the tailscaled state — which is
+why you should use an **[ephemeral](https://tailscale.com/kb/1111/ephemeral-nodes)**
+reusable auth key for the Render node: departed devices delete themselves and
+`openwebui-render` keeps its name instead of accumulating `-1`, `-2` clones.
+
+Where to get the database:
+
+- Any external Postgres works — the free tiers of Neon or Supabase don't expire
+  and are good fits.
+- Render's own free Postgres **expires after 30 days**; `render.yaml` has a
+  commented-out `databases:` block that provisions one and wires `DATABASE_URL`
+  via `fromDatabase` if you want it anyway.
+- After Blueprint creation, `DATABASE_URL` can be rotated from the service's
+  **Environment** tab (it's a `sync: false` secret, never committed to the repo).
+
 ## Access
 
-- **Public:** `https://<app-name>.fly.dev` (TLS via the Fly proxy; still behind Open
-  WebUI's own login — the first account created becomes admin)
-- **Tailnet:** `http://openwebui:8080` from any device on your tailnet
+- **Public:** `https://<app-name>.fly.dev` on Fly.io, or
+  `https://<service-name>.onrender.com` on Render — both still behind Open WebUI's
+  own login (the first account created becomes admin)
+- **Tailnet:** `http://openwebui:8080` (Fly node) or `http://openwebui-render:8080`
+  (Render node) from any device on your tailnet
 - **Tailnet HTTPS:** set `TAILSCALE_SERVE=true` in `fly.toml` to publish
   `https://openwebui.<tailnet>.ts.net` via `tailscale serve`
 
@@ -78,6 +148,7 @@ Set non-secret values under `[env]` in `fly.toml`:
 | `TAILSCALE_HOSTNAME`| `openwebui` | Node name on the tailnet                            |
 | `TAILSCALE_TAGS`    | —           | ACL tags, e.g. `tag:openwebui`                      |
 | `TAILSCALE_SERVE`   | `false`     | `true` → serve HTTPS on the tailnet via MagicDNS    |
+| `DATABASE_URL`      | SQLite      | Postgres connection string (Render: required)       |
 | `OLLAMA_BASE_URL`   | —           | Point at an Ollama instance (tailnet or otherwise)  |
 | `HTTP_PROXY` / `HTTPS_PROXY` | —  | Route outbound traffic through tailscaled (`http://localhost:1055`) |
 
@@ -159,5 +230,8 @@ normally keeps the node authenticated without the key).
 fly apps destroy openwebui   # removes app, machines, and the volume (data is lost)
 ```
 
-Also delete the `openwebui` device from the
+On Render: delete the web service in the dashboard (there is no disk — the data
+lives in your Postgres instance; drop the database there if you want it gone).
+
+Also delete the `openwebui` / `openwebui-render` devices from the
 [Tailscale admin console](https://login.tailscale.com/admin/machines).

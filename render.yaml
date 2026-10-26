@@ -1,0 +1,52 @@
+# Render Blueprint — deploy via: Dashboard → New → Blueprint → select this repo.
+# Same Dockerfile and start.sh as the Fly.io deployment; Render injects its own
+# PORT, which Open WebUI honours (do NOT set PORT here).
+#
+# Persistence model: no disk (free tier compatible). Chat history, users and
+# settings live in PostgreSQL via DATABASE_URL. Uploads, the RAG vector store
+# and tailscaled state are ephemeral — they reset on each restart/redeploy
+# (use an *ephemeral* Tailscale auth key so departed nodes clean themselves up).
+services:
+  - type: web
+    name: openwebui
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free             # sleeps after ~15 min idle (tailnet node drops offline);
+                           # switch to "starter" for 24/7 tailnet reachability
+    region: singapore      # closest Render region to Australia
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false        # postgresql://user:pass@host:5432/dbname
+                           # (Render managed PG, Neon, Supabase, ...)
+      - key: TAILSCALE_AUTHKEY
+        sync: false        # prompted at deploy time — never commit it.
+                           # Use an EPHEMERAL, reusable key: without a disk the
+                           # node loses its identity on every restart.
+      - key: TAILSCALE_HOSTNAME
+        value: openwebui-render  # distinct from the Fly node ('openwebui')
+      - key: WEBUI_SECRET_KEY
+        generateValue: true
+      # Route outbound traffic through tailscaled's userspace proxy, as on Fly.
+      - key: HTTP_PROXY
+        value: http://localhost:1055
+      - key: HTTPS_PROXY
+        value: http://localhost:1055
+      - key: NO_PROXY
+        value: localhost,127.0.0.1
+      # Set to https://ollama.<tailnet>.ts.net once the local Ollama stack is up
+      # (see docker-compose.yml).
+      - key: OLLAMA_BASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+# Alternative: let Render provision a managed Postgres instead of supplying
+# DATABASE_URL yourself. Note: Render's FREE Postgres expires after 30 days
+# (Neon/Supabase free tiers don't). Uncomment and change the DATABASE_URL
+# env var above to `fromDatabase: { name: openwebui-db, property: connectionString }`.
+# databases:
+#   - name: openwebui-db
+#     plan: free
+#     databaseName: openwebui
+#     user: openwebui
