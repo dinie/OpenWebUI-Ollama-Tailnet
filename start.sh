@@ -34,6 +34,17 @@ if [ ! -S "$TS_SOCKET" ]; then
   tail -n 20 "$TS_STATE_DIR/tailscaled.log" >&2 || true
 fi
 
+# Point the app's outbound traffic at tailscaled's userspace proxy so it can
+# reach tailnet services (e.g. Ollama). Runtime-only on purpose: as platform env
+# vars these leak into Render's Docker build and break build-time installs.
+if timeout 1 bash -c '</dev/tcp/127.0.0.1/1055' 2>/dev/null; then
+  export HTTP_PROXY="http://localhost:1055"
+  export HTTPS_PROXY="http://localhost:1055"
+  export NO_PROXY="localhost,127.0.0.1"
+else
+  echo "[start.sh] WARNING: tailscaled proxy not listening on :1055; app won't reach tailnet services" >&2
+fi
+
 if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
   tailscale up \
     --auth-key="$TAILSCALE_AUTHKEY" \

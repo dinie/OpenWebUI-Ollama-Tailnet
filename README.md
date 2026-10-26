@@ -76,8 +76,8 @@ Render deploys from a Git repo, so push this directory to GitHub/GitLab first, t
    select the repo. Render reads `render.yaml` and creates the free-plan web
    service, health check, and environment variables (no disk — persistence comes
    from PostgreSQL, see below).
-2. When prompted, set `TAILSCALE_AUTHKEY`, `DATABASE_URL`, and (once local Ollama
-   is running) `OLLAMA_BASE_URL=https://ollama.<tailnet>.ts.net`.
+2. When prompted, set `TAILSCALE_AUTHKEY` and `DATABASE_URL` (`OLLAMA_BASE_URL`
+   is hardcoded in `render.yaml` to the local Ollama node's tailnet address).
 3. Render builds `Dockerfile` and starts it. The app is live at
    `https://<service-name>.onrender.com` and joins the tailnet as
    `openwebui-render`.
@@ -99,6 +99,9 @@ Render vs Fly.io notes:
   in `render.yaml` if you need 24/7 tailnet reachability.
 - Render injects its own `PORT`, which Open WebUI honours — `PORT` is deliberately
   not set in `render.yaml`.
+- Render exposes service env vars to the Docker **build**, so `HTTP(S)_PROXY` is
+  exported by `start.sh` at container start instead — a localhost proxy visible
+  at build time breaks `apt`/`curl` install steps (observed as failed builds).
 - `region: singapore` is the closest Render region to Australia.
 
 ### PostgreSQL persistence (Render)
@@ -150,7 +153,7 @@ Set non-secret values under `[env]` in `fly.toml`:
 | `TAILSCALE_SERVE`   | `false`     | `true` → serve HTTPS on the tailnet via MagicDNS    |
 | `DATABASE_URL`      | SQLite      | Postgres connection string (Render: required)       |
 | `OLLAMA_BASE_URL`   | —           | Point at an Ollama instance (tailnet or otherwise)  |
-| `HTTP_PROXY` / `HTTPS_PROXY` | —  | Route outbound traffic through tailscaled (`http://localhost:1055`) |
+| `HTTP(S)_PROXY`     | (runtime)   | Exported by `start.sh` — never set as platform env vars |
 
 Set secrets with `fly secrets set` (or export them before running `deploy.sh`):
 `TAILSCALE_AUTHKEY`, `WEBUI_SECRET_KEY`, `OPENAI_API_KEY`.
@@ -178,10 +181,12 @@ docker compose exec tailscale tailscale status
 curl https://ollama.<tailnet>.ts.net/api/tags
 ```
 
-Then point the Fly app at it: uncomment the `OLLAMA_BASE_URL` / `HTTP_PROXY` /
-`HTTPS_PROXY` / `NO_PROXY` lines in `[env]` in `fly.toml` (fill in your tailnet name)
-and rerun `./deploy.sh`. Open WebUI's outbound traffic then flows through the
-tailscaled proxy on `localhost:1055` inside the Fly machine, straight to your Mac.
+Then point the app(s) at it: set `OLLAMA_BASE_URL=https://ollama.<tailnet>.ts.net`
+(hint in `fly.toml`; hardcoded in `render.yaml`) and redeploy. `start.sh` exports
+`HTTP(S)_PROXY` itself at runtime — deliberately not a platform env var, since
+Render (and builds generally) would see an unusable localhost proxy during the
+Docker build. Open WebUI's outbound traffic then flows through tailscaled's
+userspace proxy (`localhost:1055` inside the container), straight to your Mac.
 
 Notes:
 

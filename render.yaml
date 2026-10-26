@@ -11,6 +11,9 @@ services:
     name: openwebui
     runtime: docker
     dockerfilePath: ./Dockerfile
+    # Start command: the image CMD (/start.sh) — initialises tailscaled in
+    # userspace-networking mode, binds app egress to its localhost:1055 proxy
+    # via runtime-exported HTTP(S)_PROXY, then bootstraps Open WebUI.
     plan: free             # sleeps after ~15 min idle (tailnet node drops offline);
                            # switch to "starter" for 24/7 tailnet reachability
     region: singapore      # closest Render region to Australia
@@ -27,17 +30,11 @@ services:
         value: openwebui-render  # distinct from the Fly node ('openwebui')
       - key: WEBUI_SECRET_KEY
         generateValue: true
-      # Route outbound traffic through tailscaled's userspace proxy, as on Fly.
-      - key: HTTP_PROXY
-        value: http://localhost:1055
-      - key: HTTPS_PROXY
-        value: http://localhost:1055
-      - key: NO_PROXY
-        value: localhost,127.0.0.1
-      # Set to https://ollama.<tailnet>.ts.net once the local Ollama stack is up
-      # (see docker-compose.yml).
+      # HTTP(S)_PROXY is exported by start.sh at container start, NOT defined as
+      # an env var — Render exposes env vars to the Docker build, where a
+      # localhost:1055 proxy breaks build-time package installs (apt/curl).
       - key: OLLAMA_BASE_URL
-        sync: false
+        value: https://ollama.tailnet-eeb1.ts.net  # local Ollama via tailscale serve
       - key: OPENAI_API_KEY
         sync: false
 
