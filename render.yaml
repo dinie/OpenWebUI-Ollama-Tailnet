@@ -35,6 +35,14 @@ services:
       # localhost:1055 proxy breaks build-time package installs (apt/curl).
       - key: OLLAMA_BASE_URL
         value: https://ollama.tailnet-eeb1.ts.net  # local Ollama via tailscale serve
+      # Stay under the 512MB free-plan cap: offload RAG embeddings to the tailnet
+      # Ollama instead of loading sentence-transformers/PyTorch in this container.
+      # Requires an embedding model in Ollama:
+      #   docker compose exec ollama ollama pull nomic-embed-text
+      - key: RAG_EMBEDDING_ENGINE
+        value: ollama
+      - key: RAG_EMBEDDING_MODEL
+        value: nomic-embed-text
       - key: OPENAI_API_KEY
         sync: false
 

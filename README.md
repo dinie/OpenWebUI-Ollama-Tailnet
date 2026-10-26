@@ -104,6 +104,26 @@ Render vs Fly.io notes:
   at build time breaks `apt`/`curl` install steps (observed as failed builds).
 - `region: singapore` is the closest Render region to Australia.
 
+### Memory footprint (Render 512MB cap)
+
+Render's free **and** Starter plans both cap instances at 512MB — upgrading to
+Starter would NOT help. The stock Open WebUI config loads
+sentence-transformers + PyTorch for local RAG embeddings, which (with Python and
+tailscaled) OOMs the instance at boot. `render.yaml` therefore offloads
+embeddings to the tailnet Ollama (`RAG_EMBEDDING_ENGINE=ollama`):
+
+```bash
+docker compose exec ollama ollama pull nomic-embed-text   # needed once, locally
+```
+
+This keeps the Render instance in the ~350–450MB range. Note the trade-off:
+RAG ingestion/retrieval on Render now round-trips to your Mac, and won't work
+while it's offline. The Fly deployment is untouched — its 2GB VM runs the
+default local embeddings fine.
+
+If memory still spikes (many concurrent users), the options are Render Standard
+(2GB, paid) or just using the Fly deployment.
+
 ### PostgreSQL persistence (Render)
 
 Open WebUI reads `DATABASE_URL` natively (SQLAlchemy/Peewee) and runs its
@@ -170,9 +190,10 @@ Prerequisites: Docker Desktop running; HTTPS certificates + MagicDNS enabled on 
 tailnet (both on by default).
 
 ```bash
-# 1. Bring it up and pull a model
+# 1. Bring it up and pull models (chat + embeddings used by the Render instance)
 docker compose up -d
 docker compose exec ollama ollama pull llama3.2
+docker compose exec ollama ollama pull nomic-embed-text
 
 # 2. Check the node registered on the tailnet
 docker compose exec tailscale tailscale status
