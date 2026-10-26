@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Fail loudly at startup if the client isn't in the image (see Dockerfile).
+for cmd in tailscale tailscaled; do
+  command -v "$cmd" >/dev/null || { echo "[start.sh] ERROR: '$cmd' not found in image — check the Docker build" >&2; exit 1; }
+done
+
 # tailscaled state lives on the Fly volume so the node keeps its identity
 # (and doesn't consume a new auth key / create a new tailnet device) on redeploys.
 TS_STATE_DIR="${TAILSCALE_STATE_DIR:-/app/backend/data/tailscale}"
@@ -23,6 +28,11 @@ for _ in $(seq 1 40); do
   [ -S "$TS_SOCKET" ] && break
   sleep 0.5
 done
+
+if [ ! -S "$TS_SOCKET" ]; then
+  echo "[start.sh] WARNING: tailscaled did not create its socket; recent log:" >&2
+  tail -n 20 "$TS_STATE_DIR/tailscaled.log" >&2 || true
+fi
 
 if [ -n "${TAILSCALE_AUTHKEY:-}" ]; then
   tailscale up \
