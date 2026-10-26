@@ -1,0 +1,37 @@
+# Local Ollama, published to the tailnet via a Tailscale sidecar.
+# Requires TAILSCALE_AUTHKEY in .env (compose reads .env automatically).
+#   docker compose up -d
+#   docker compose exec ollama ollama pull llama3.2
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks: [ollama-net]
+    # No published ports: only reachable via the tailscale sidecar.
+
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: ollama
+    restart: unless-stopped
+    depends_on: [ollama]
+    environment:
+      TS_AUTHKEY: ${TAILSCALE_AUTHKEY:?TAILSCALE_AUTHKEY must be set (see .env.example)}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_HOSTNAME: ollama
+      TS_USERSPACE: "true"
+      # Reusable auth keys may be shared across nodes; the state volume keeps
+      # this node's identity stable across restarts.
+    volumes:
+      - ts_state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
+    networks: [ollama-net]
+
+volumes:
+  ollama_data:
+  ts_state:
+
+networks:
+  ollama-net:

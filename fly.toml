@@ -1,0 +1,51 @@
+app = "openwebui"          # must be globally unique — change if taken
+primary_region = "syd"     # change to your nearest Fly region
+
+[env]
+  PORT = "8080"
+  # Non-secret config goes here. Secrets (TAILSCALE_AUTHKEY, WEBUI_SECRET_KEY,
+  # OPENAI_API_KEY, ...) go in via: fly secrets set KEY=value
+  # Optional tailnet knobs (see start.sh):
+  # TAILSCALE_HOSTNAME = "openwebui"
+  # TAILSCALE_TAGS     = "tag:openwebui"
+  # TAILSCALE_SERVE    = "true"
+  # To reach tailnet services (e.g. Ollama) through tailscaled's userspace proxy.
+  # Uncomment after bringing up the local Ollama stack (see docker-compose.yml),
+  # replacing <tailnet> with your tailnet name, then rerun ./deploy.sh.
+  # OLLAMA_BASE_URL = "https://ollama.<tailnet>.ts.net"
+  # HTTP_PROXY  = "http://localhost:1055"
+  # HTTPS_PROXY = "http://localhost:1055"
+  # NO_PROXY    = "localhost,127.0.0.1"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep one machine always on, otherwise the node drops off the tailnet
+  # when idle. Set min_machines_running = 0 and auto_stop_machines = "stop"
+  # to save cost if you only use the public URL.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[http_service.checks]]
+  grace_period = "90s"
+  interval = "30s"
+  method = "GET"
+  timeout = "10s"
+  path = "/health"
+
+# Persists Open WebUI's SQLite DB/uploads and (via start.sh) tailscaled state,
+# so the tailnet node identity survives redeploys.
+[[mounts]]
+  source = "openwebui_data"
+  destination = "/app/backend/data"
+
+[[vm]]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2

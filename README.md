@@ -1,0 +1,163 @@
+# Open WebUI on Fly.io + Tailscale
+
+Runs [Open WebUI](https://github.com/open-webui/open-webui) as a private application on
+[Fly.io](https://fly.io), with a [Tailscale](https://tailscale.com) client baked into the
+container so the instance is also reachable directly on your tailnet.
+
+## How it works
+
+- The container image extends `ghcr.io/open-webui/open-webui` and installs the
+  Tailscale client (`tailscaled` + `tailscale` CLI).
+- At container start, `start.sh` brings up `tailscaled` in **userspace networking**
+  mode (no `/dev/net/tun` or `NET_ADMIN` required on Fly machines), authenticates with
+  `TAILSCALE_AUTHKEY`, then chains into Open WebUI's own startup script
+  (`/app/backend/start.sh`).
+- A Fly volume mounted at `/app/backend/data` persists Open WebUI's SQLite database and
+  uploads **and** the tailscaled state, so the node keeps its tailnet identity across
+  redeploys (no new device / auth key consumption per deploy).
+- The app listens on port `8080`, handled publicly by the Fly proxy, and privately on
+  the tailnet via tailscaled.
+
+## Files
+
+| File         | Purpose                                                        |
+|--------------|----------------------------------------------------------------|
+| `Dockerfile` | Open WebUI base image + Tailscale client + entrypoint wiring   |
+| `start.sh`   | Starts `tailscaled`, runs `tailscale up`, then starts Open WebUI |
+| `fly.toml`   | Fly app config: region, volume mount, health check, VM size    |
+| `deploy.sh`  | Idempotent deploy: creates app/volume/secrets, then deploys    |
+| `docker-compose.yml` | Local Ollama + Tailscale sidecar published on the tailnet |
+| `tailscale/serve.json` | `tailscale serve` config: tailnet HTTPS :443 → `ollama:11434` |
+| `.env`       | (gitignored) Local secrets, sourced by `deploy.sh` / compose   |
+
+## Prerequisites
+
+- [`flyctl`](https://fly.io/docs/flyctl/install/) installed and authenticated
+  (`flyctl auth login`)
+- A Tailscale account, and a **reusable** auth key created at
+  <https://login.tailscale.com/admin/settings/keys>
+  - Recommended: pre-approved and tagged (e.g. `tag:openwebui`); set
+    `TAILSCALE_TAGS=tag:openwebui` in `fly.toml` to match.
+  - The key is injected as a **runtime** secret. It is consumed by `tailscale up`
+    when the container starts, so there is no reason (and it is unsafe — it ends up
+    in image layers) to bake it in at build time.
+
+## Deploy
+
+```bash
+# 1. Configure
+cp .env.example .env   # or just export the variable
+#    put TAILSCALE_AUTHKEY=tskey-auth-XXXX in .env (or export it)
+
+# 2. Deploy (idempotent — same command for first deploy and updates)
+./deploy.sh
+```
+
+`deploy.sh` will: source `.env`, create the Fly app if missing, create a 3 GB
+`openwebui_data` volume if missing, set secrets (`TAILSCALE_AUTHKEY`, a generated
+`WEBUI_SECRET_KEY`, and `OPENAI_API_KEY` if exported), then run `flyctl deploy`.
+
+App name and region come from `fly.toml`; override with `FLY_APP` / `FLY_REGION`
+environment variables. The app name must be globally unique on Fly.io.
+
+## Access
+
+- **Public:** `https://<app-name>.fly.dev` (TLS via the Fly proxy; still behind Open
+  WebUI's own login — the first account created becomes admin)
+- **Tailnet:** `http://openwebui:8080` from any device on your tailnet
+- **Tailnet HTTPS:** set `TAILSCALE_SERVE=true` in `fly.toml` to publish
+  `https://openwebui.<tailnet>.ts.net` via `tailscale serve`
+
+## Configuration
+
+Set non-secret values under `[env]` in `fly.toml`:
+
+| Variable            | Default     | Purpose                                             |
+|---------------------|-------------|-----------------------------------------------------|
+| `PORT`              | `8080`      | Port Open WebUI listens on                          |
+| `TAILSCALE_HOSTNAME`| `openwebui` | Node name on the tailnet                            |
+| `TAILSCALE_TAGS`    | —           | ACL tags, e.g. `tag:openwebui`                      |
+| `TAILSCALE_SERVE`   | `false`     | `true` → serve HTTPS on the tailnet via MagicDNS    |
+| `OLLAMA_BASE_URL`   | —           | Point at an Ollama instance (tailnet or otherwise)  |
+| `HTTP_PROXY` / `HTTPS_PROXY` | —  | Route outbound traffic through tailscaled (`http://localhost:1055`) |
+
+Set secrets with `fly secrets set` (or export them before running `deploy.sh`):
+`TAILSCALE_AUTHKEY`, `WEBUI_SECRET_KEY`, `OPENAI_API_KEY`.
+
+### Local Ollama on the tailnet
+
+`docker-compose.yml` runs [Ollama](https://ollama.com) locally in Docker with a
+Tailscale sidecar that publishes it on the tailnet as
+`https://ollama.<tailnet>.ts.net` (`tailscale serve` proxies tailnet 443 →
+`ollama:11434`; the Ollama port is never exposed anywhere else). The sidecar reuses
+the `TAILSCALE_AUTHKEY` from `.env` — a reusable key can authenticate multiple nodes.
+
+Prerequisites: Docker Desktop running; HTTPS certificates + MagicDNS enabled on the
+tailnet (both on by default).
+
+```bash
+# 1. Bring it up and pull a model
+docker compose up -d
+docker compose exec ollama ollama pull llama3.2
+
+# 2. Check the node registered on the tailnet
+docker compose exec tailscale tailscale status
+
+# 3. Verify from any tailnet device
+curl https://ollama.<tailnet>.ts.net/api/tags
+```
+
+Then point the Fly app at it: uncomment the `OLLAMA_BASE_URL` / `HTTP_PROXY` /
+`HTTPS_PROXY` / `NO_PROXY` lines in `[env]` in `fly.toml` (fill in your tailnet name)
+and rerun `./deploy.sh`. Open WebUI's outbound traffic then flows through the
+tailscaled proxy on `localhost:1055` inside the Fly machine, straight to your Mac.
+
+Notes:
+
+- Ollama in Docker Desktop on a Mac uses **CPU only** (containers get no Apple-GPU
+  access) — fine for small models. For Metal acceleration, install Ollama natively
+  instead, delete the `ollama` service from `docker-compose.yml`, and change the
+  proxy target in `tailscale/serve.json` to `http://host.docker.internal:11434`.
+- Ollama itself has no authentication; it is protected only by being reachable
+  exclusively on your tailnet. Tighten with
+  [ACLs](https://tailscale.com/kb/1018/acls) if you share the tailnet.
+- State lives in named volumes: `ollama_data` (models) and `ts_state` (node
+  identity). `docker compose down` keeps both; `down -v` deletes models and the
+  tailnet identity.
+
+### Tailnet-only (no public URL)
+
+Remove the entire `[http_service]` block from `fly.toml` and redeploy. The app will
+have no public address; access it via `http://openwebui:8080` on the tailnet, or set
+`TAILSCALE_SERVE=true` for HTTPS.
+
+## Operations
+
+```bash
+fly logs -a openwebui                 # app logs
+fly status -a openwebui               # machines/status
+fly ssh console -a openwebui          # shell into the machine
+tailscale status                      # (inside the machine) tailnet state
+```
+
+tailscaled writes its own log to `/app/backend/data/tailscale/tailscaled.log` on the
+volume. If the node stops appearing on the tailnet, check that file and confirm
+`TAILSCALE_AUTHKEY` is still valid (auth keys can expire; the volume-stored state
+normally keeps the node authenticated without the key).
+
+## Costs / scaling notes
+
+- `fly.toml` keeps **one machine always running** (`min_machines_running = 1`,
+  `auto_stop_machines = "off"`) so the node stays on the tailnet. To save money,
+  allow auto-stop — but the tailnet endpoint will be unreachable while stopped.
+- The volume is attached to a single machine; don't scale above 1 without moving to
+  an external database and object storage.
+
+## Teardown
+
+```bash
+fly apps destroy openwebui   # removes app, machines, and the volume (data is lost)
+```
+
+Also delete the `openwebui` device from the
+[Tailscale admin console](https://login.tailscale.com/admin/machines).
