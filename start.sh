@@ -38,6 +38,7 @@ fi
 # reach tailnet services (e.g. Ollama). Runtime-only on purpose: as platform env
 # vars these leak into Render's Docker build and break build-time installs.
 if timeout 1 bash -c '</dev/tcp/127.0.0.1/1055' 2>/dev/null; then
+  export ALL_PROXY="http://localhost:1055"
   export HTTP_PROXY="http://localhost:1055"
   export HTTPS_PROXY="http://localhost:1055"
   export NO_PROXY="localhost,127.0.0.1"

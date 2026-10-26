@@ -102,6 +102,9 @@ Render vs Fly.io notes:
 - Render exposes service env vars to the Docker **build**, so `HTTP(S)_PROXY` is
   exported by `start.sh` at container start instead — a localhost proxy visible
   at build time breaks `apt`/`curl` install steps (observed as failed builds).
+  If you previously synced proxy vars onto the service, delete them manually in
+  the **Environment** tab — removing them from `render.yaml` doesn't always
+  clean up values already stored on the service.
 - `region: singapore` is the closest Render region to Australia.
 
 ### Memory footprint (Render 512MB cap)

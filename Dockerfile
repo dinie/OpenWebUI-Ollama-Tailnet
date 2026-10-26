@@ -1,15 +1,16 @@
-# Open WebUI + Tailscale, deployable on Fly.io.
+# Open WebUI + Tailscale, deployable on Fly.io / Render.
 # For reproducible deploys, pin a release tag instead of :main.
 FROM ghcr.io/open-webui/open-webui:main
 
 USER root
 
-# Install the Tailscale client (tailscaled + tailscale CLI).
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
- && curl -fsSL https://tailscale.com/install.sh | sh \
- && rm -rf /var/lib/apt/lists/*
-
+# Copy the client from the official image rather than apt/curl-installing it:
+# this build must not do any network installs. Render exposes the service's env
+# vars to Docker builds (HTTP(S)_PROXY=localhost:1055 broke apt/curl here), and
+# `curl ... | sh` silently no-ops on network failure, yielding an image with no
+# tailscale binaries that only fails at container start.
+COPY --from=tailscale/tailscale:stable /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY --from=tailscale/tailscale:stable /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 RUN tailscale version
 
 COPY start.sh /start.sh
